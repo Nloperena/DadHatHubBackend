@@ -102,6 +102,7 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
+
 /**
  * Fetch specific product details by ID from Printful.
  */
