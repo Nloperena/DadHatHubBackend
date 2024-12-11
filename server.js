@@ -21,22 +21,16 @@ const PRINTFUL_API_KEY = process.env.PRINTFUL_API_KEY;
 // Debug: Check if we have Printful API key
 console.log("Printful API key present:", Boolean(PRINTFUL_API_KEY));
 
-app.use(cors());                            // Allow cross-origin requests
-app.use(express.json());                    // Parse incoming JSON into req.body
-app.use(express.urlencoded({ extended: true })); // Parse URL-encoded form data
+// Allow cross-origin requests
+app.use(cors());
 
 // Stripe webhook endpoint secret
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 // Debug: Check if we have a Stripe Webhook Secret
 console.log("Stripe Webhook Secret present:", Boolean(endpointSecret));
 
-// A simple test route to confirm server is running
-app.get('/', (req, res) => {
-  // Respond with a friendly message
-  res.send('Welcome to the DadHatHub API!');
-});
-
 // Webhook endpoint: Stripe calls this when something happens, like a payment finishing
+// Important: Define this BEFORE using express.json() so the raw body is available
 app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
@@ -44,6 +38,14 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
   try {
     event = stripeClient.webhooks.constructEvent(req.body, sig, endpointSecret);
     console.log('Webhook Verified:', event);
+
+    // Handle event if needed (e.g., checkout.session.completed)
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+      console.log('Payment successful:', session);
+      // Fulfill the order here if needed
+    }
+
     res.status(200).send('Webhook received!');
   } catch (err) {
     console.error('Webhook signature verification failed:', err.message);
@@ -51,9 +53,15 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
   }
 });
 
-// After defining the webhook, then use body parsers for other routes
+// After defining the webhook, now we can use body parsing middleware for other routes
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// A simple test route to confirm server is running
+app.get('/', (req, res) => {
+  // Respond with a friendly message
+  res.send('Welcome to the DadHatHub API!');
+});
 
 // Get all products from Printful
 app.get('/api/products', async (req, res) => {
