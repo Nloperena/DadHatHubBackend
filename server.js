@@ -1,9 +1,6 @@
 // This code sets up a simple Express server that talks to Stripe to create a checkout session
 // and also create orders in Printful after a successful payment.
 // We add console.log statements (debugging) to see what's going on and help fix problems.
-//
-// Key change: We now store variant_id and product_id in price_data.metadata (not product_data.metadata)
-// so we can access them after checkout.
 
 const express = require('express');         // Import Express to create a web server
 const axios = require('axios');             // Import Axios to make HTTP requests
@@ -52,10 +49,9 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
       console.log('Line Items from Stripe:', lineItems.data);
 
       // 2. Build items array for Printful order from the line items metadata
-      // We placed variant_id and product_id in price_data.metadata, so we can access them as:
-      // lineItem.price.metadata.variant_id
       const printfulItems = lineItems.data.map((item) => {
-        const variantId = item.price.metadata.variant_id;  // Get variant_id from price metadata
+        // We saved variant_id in product_data.metadata.variant_id when creating the session
+        const variantId = item.price.product_metadata.variant_id;
         return {
           variant_id: parseInt(variantId, 10), // Ensure it's a number
           quantity: item.quantity,
@@ -66,12 +62,12 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
       const { customer_details } = session;
       const recipient = {
         name: customer_details.name || 'No Name Provided',
-        address1: customer_details.address?.line1 || '',
-        address2: customer_details.address?.line2 || '',
-        city: customer_details.address?.city || '',
-        state_code: customer_details.address?.state || '',
-        country_code: customer_details.address?.country || 'US',
-        zip: customer_details.address?.postal_code || ''
+        address1: customer_details.address.line1 || '',
+        address2: customer_details.address.line2 || '',
+        city: customer_details.address.city || '',
+        state_code: customer_details.address.state || '',
+        country_code: customer_details.address.country || 'US',
+        zip: customer_details.address.postal_code || ''
       };
 
       console.log('Creating Printful order with items:', printfulItems);
@@ -204,35 +200,37 @@ app.post('/api/stripe/create-checkout-session', async (req, res) => {
 
   try {
     // Build the line items array for Stripe
-    // Move variant_id and product_id to price_data.metadata so we can access it after payment
     const lineItems = cart.map((item) => ({
+      // price_data tells Stripe about the product and its price
       price_data: {
-        currency: 'usd',
+        currency: 'usd',                // Currency is US dollars
         product_data: {
-          name: item.name,
-          images: [item.thumbnail_url],
+          name: item.name,             // Product name
+          images: [item.thumbnail_url],// Product image for Stripe's checkout page
+          metadata: {
+            variant_id: String(item.variant_id), // Convert to string for metadata
+            product_id: String(item.id),         // Convert to string for metadata
+          },
         },
-        metadata: {
-          variant_id: String(item.variant_id),
-          product_id: String(item.id),
-        },
-        unit_amount: item.price,
+        unit_amount: item.price,        // Price in cents
       },
-      quantity: item.quantity,
+      quantity: item.quantity,          // How many of this item
     }));
 
     // Debug: Print the line items for verification
     console.log("Line Items for Stripe:", JSON.stringify(lineItems, null, 2));
 
     const session = await stripeClient.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: lineItems,
-      mode: 'payment',
-      customer_email: customerInfo.email,
-      success_url: `${process.env.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL}/cancel`,
-      shipping_address_collection: { allowed_countries: ['US', 'CA'] },
-      billing_address_collection: 'required',
+      payment_method_types: ['card'], // Accept card payments
+      line_items: lineItems,          // Our items for checkout
+      mode: 'payment',                // One-time payment mode
+      customer_email: customerInfo.email, // Send email to Stripe for receipts
+      success_url: `${process.env.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`, // Where to go if payment succeeds
+      cancel_url: `${process.env.FRONTEND_URL}/cancel`, // Where to go if they cancel
+      shipping_address_collection: {
+        allowed_countries: ['US', 'CA'], // Which countries we ship to
+      },
+      billing_address_collection: 'required', // Ask for billing address
     });
 
     // Debug: Print the session we got back from Stripe
