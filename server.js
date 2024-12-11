@@ -38,33 +38,22 @@ app.get('/', (req, res) => {
 
 // Webhook endpoint: Stripe calls this when something happens, like a payment finishing
 app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
-  // Extract Stripe signature from headers
   const sig = req.headers['stripe-signature'];
-
   let event;
+
   try {
-    // Construct a Stripe event for security to make sure it's really from Stripe
     event = stripeClient.webhooks.constructEvent(req.body, sig, endpointSecret);
     console.log('Webhook Verified:', event);
-
-    // If a checkout session completed, we handle it
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object;
-      console.log('Payment successful:', session);
-      // Here you can handle what happens when checkout is done
-      // For example: fulfill the order, send email, etc.
-    } else {
-      console.log(`Unhandled event type: ${event.type}`);
-    }
-
-    // Tell Stripe we got the event
     res.status(200).send('Webhook received!');
   } catch (err) {
-    // If there's a problem verifying the webhook, log it
     console.error('Webhook signature verification failed:', err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
+    res.status(400).send(`Webhook Error: ${err.message}`);
   }
 });
+
+// After defining the webhook, then use body parsers for other routes
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Get all products from Printful
 app.get('/api/products', async (req, res) => {
