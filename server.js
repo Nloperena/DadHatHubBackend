@@ -78,17 +78,19 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
           'https://api.printful.com/orders',
           {
             recipient,
-            items: printfulItems
+            items: printfulItems,
+            confirm: 1 // This line confirms the order immediately
           },
           {
             headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` }
           }
         );
-
+      
         console.log('Printful order created:', printfulResponse.data);
       } catch (error) {
         console.error('Error creating Printful order:', error.message, error.response?.data);
       }
+      
     }
 
     res.status(200).send('Webhook received!');
