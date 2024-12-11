@@ -13,7 +13,7 @@ const app = express();                      // Create an Express application
 const PORT = process.env.PORT || 5000;      // Use the port given by the environment or 5000 as a backup
 
 // Set up Stripe with our secret key from environment variables
-const stripeClient = stripe(process.env.STRIPE_SECRET_KEY);
+const stripeClient = stripe(process.env.STRIPE_SECRET_KEY); 
 // Debug: Check if we have a Stripe secret key
 console.log("Stripe secret key present:", Boolean(process.env.STRIPE_SECRET_KEY));
 
@@ -51,8 +51,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
       // 2. Build items array for Printful order from the line items metadata
       const printfulItems = lineItems.data.map((item) => {
         // We saved variant_id in product_data.metadata.variant_id when creating the session
-        // In the webhook route
-        const variantId = item.price.metadata.variant_id;
+        const variantId = item.price.product_metadata.variant_id;
         return {
           variant_id: parseInt(variantId, 10), // Ensure it's a number
           quantity: item.quantity,
@@ -79,8 +78,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
           'https://api.printful.com/orders',
           {
             recipient,
-            items: printfulItems,
-            confirm: 1 // This line confirms the order immediately
+            items: printfulItems
           },
           {
             headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` }
@@ -91,7 +89,6 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
       } catch (error) {
         console.error('Error creating Printful order:', error.message, error.response?.data);
       }
-
     }
 
     res.status(200).send('Webhook received!');
@@ -203,23 +200,22 @@ app.post('/api/stripe/create-checkout-session', async (req, res) => {
 
   try {
     // Build the line items array for Stripe
-    // In create-checkout-session route
     const lineItems = cart.map((item) => ({
+      // price_data tells Stripe about the product and its price
       price_data: {
-        currency: 'usd',
+        currency: 'usd',                // Currency is US dollars
         product_data: {
-          name: item.name,
-          images: [item.thumbnail_url],
+          name: item.name,             // Product name
+          images: [item.thumbnail_url],// Product image for Stripe's checkout page
+          metadata: {
+            variant_id: String(item.variant_id), // Convert to string for metadata
+            product_id: String(item.id),         // Convert to string for metadata
+          },
         },
-        unit_amount: item.price,
-        metadata: {
-          variant_id: String(item.variant_id),
-          product_id: String(item.id),
-        }
+        unit_amount: item.price,        // Price in cents
       },
-      quantity: item.quantity,
+      quantity: item.quantity,          // How many of this item
     }));
-
 
     // Debug: Print the line items for verification
     console.log("Line Items for Stripe:", JSON.stringify(lineItems, null, 2));
