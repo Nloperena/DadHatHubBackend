@@ -1,29 +1,37 @@
 // This code sets up a simple Express server that talks to Stripe to create a checkout session
-// and also creates orders in Printful after a successful payment.
+// and also create orders in Printful after a successful payment.
 // We add console.log statements (debugging) to see what's going on and help fix problems.
 
-const express = require('express');         
-const axios = require('axios');             
-const cors = require('cors');               
-const dotenv = require('dotenv');           
-const stripe = require('stripe');           
+const express = require('express');         // Import Express to create a web server
+const axios = require('axios');             // Import Axios to make HTTP requests
+const cors = require('cors');               // Import CORS to allow other sites to talk to our server
+const dotenv = require('dotenv');           // Import Dotenv to load our secret keys from a .env file
+const stripe = require('stripe');           // Import Stripe library for payments
 
-dotenv.config();                            
-const app = express();                      
-const PORT = process.env.PORT || 5000;      
+dotenv.config();                            // Load environment variables from .env file
+const app = express();                      // Create an Express application
+const PORT = process.env.PORT || 5000;      // Use the port given by the environment or 5000 as a backup
 
-const stripeClient = stripe(process.env.STRIPE_SECRET_KEY); 
+// Set up Stripe with our secret key from environment variables
+const stripeClient = stripe(process.env.STRIPE_SECRET_KEY);
+// Debug: Check if we have a Stripe secret key
 console.log("Stripe secret key present:", Boolean(process.env.STRIPE_SECRET_KEY));
 
+// Printful API key from environment
 const PRINTFUL_API_KEY = process.env.PRINTFUL_API_KEY;
+// Debug: Check if we have Printful API key
 console.log("Printful API key present:", Boolean(PRINTFUL_API_KEY));
 
+// Allow cross-origin requests
 app.use(cors());
 
+// Stripe webhook endpoint secret
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+// Debug: Check if we have a Stripe Webhook Secret
 console.log("Stripe Webhook Secret present:", Boolean(endpointSecret));
 
-// Webhook must be defined before express.json()
+// Webhook endpoint: Stripe calls this when something happens, like a payment finishing
+// Important: Define this BEFORE using express.json() so the raw body is available
 app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
@@ -36,19 +44,22 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
       const session = event.data.object;
       console.log('Payment successful:', session);
 
-      // Get line items
+      // 1. Get line items for the session to know what was purchased
       const lineItems = await stripeClient.checkout.sessions.listLineItems(session.id, { limit: 100 });
       console.log('Line Items from Stripe:', lineItems.data);
 
-      // Extract variant_id from price.metadata
+      // 2. Build items array for Printful order from the line items metadata
       const printfulItems = lineItems.data.map((item) => {
+        // We saved variant_id in product_data.metadata.variant_id when creating the session
+        // In the webhook route
         const variantId = item.price.metadata.variant_id;
         return {
-          variant_id: parseInt(variantId, 10),
+          variant_id: parseInt(variantId, 10), // Ensure it's a number
           quantity: item.quantity,
         };
       });
 
+      // 3. Prepare the shipping info from the session’s customer details
       const { customer_details } = session;
       const recipient = {
         name: customer_details.name || 'No Name Provided',
@@ -69,7 +80,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
           {
             recipient,
             items: printfulItems,
-            confirm: 1 // Confirm the order immediately
+            confirm: 1 // This line confirms the order immediately
           },
           {
             headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` }
@@ -80,6 +91,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
       } catch (error) {
         console.error('Error creating Printful order:', error.message, error.response?.data);
       }
+
     }
 
     res.status(200).send('Webhook received!');
@@ -89,22 +101,28 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
   }
 });
 
-// After webhook, now we can use JSON parsing
+// After defining the webhook, now we can use body parsing middleware for other routes
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// A simple test route to confirm server is running
 app.get('/', (req, res) => {
+  // Respond with a friendly message
   res.send('Welcome to the DadHatHub API!');
 });
 
+// Get all products from Printful
 app.get('/api/products', async (req, res) => {
   try {
+    // Make a call to Printful's store products API
     const response = await axios.get('https://api.printful.com/store/products', {
       headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
     });
 
+    // Debug: Show how many products we got
     console.log('Number of products fetched:', response.data.result.length);
 
+    // For each product, get its details
     const detailedProducts = await Promise.all(
       response.data.result.map(async (product) => {
         const detailsResponse = await axios.get(
@@ -133,16 +151,19 @@ app.get('/api/products', async (req, res) => {
       })
     );
 
+    // Respond with a list of products
     res.status(200).json({ products: detailedProducts });
   } catch (error) {
+    // If there's an error, log it and send a server error message
     console.error('Error fetching products from Printful:', error.message);
     res.status(500).json({ error: 'Failed to fetch products.' });
   }
 });
 
+// Get details for a specific product
 app.get('/api/products/:id', async (req, res) => {
   const productId = req.params.id;
-  console.log(`Fetching product with ID: ${productId}`);
+  console.log(`Fetching product with ID: ${productId}`); // Debug: Show which product ID we're fetching
 
   try {
     const response = await axios.get(`https://api.printful.com/store/products/${productId}`, {
@@ -159,6 +180,7 @@ app.get('/api/products/:id', async (req, res) => {
       variants: product.sync_variants.map((variant) => ({
         id: variant.id,
         name: variant.name,
+        // Multiply price by 100 to convert dollars to cents
         price: parseFloat(variant.retail_price) * 100,
         thumbnail_url: variant.files?.find((file) => file.type === 'preview')?.preview_url || null,
       })),
@@ -171,13 +193,17 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
+// Create a Stripe Checkout session
 app.post('/api/stripe/create-checkout-session', async (req, res) => {
   const { cart, customerInfo } = req.body;
 
+  // Debug: Log what we received from the frontend
   console.log("Received cart from frontend:", cart);
   console.log("Received customerInfo from frontend:", customerInfo);
 
   try {
+    // Build the line items array for Stripe
+    // In create-checkout-session route
     const lineItems = cart.map((item) => ({
       price_data: {
         currency: 'usd',
@@ -189,28 +215,35 @@ app.post('/api/stripe/create-checkout-session', async (req, res) => {
         metadata: {
           variant_id: String(item.variant_id),
           product_id: String(item.id),
-        },
+        }
       },
       quantity: item.quantity,
     }));
 
+
+    // Debug: Print the line items for verification
     console.log("Line Items for Stripe:", JSON.stringify(lineItems, null, 2));
 
     const session = await stripeClient.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: lineItems,
-      mode: 'payment',
-      customer_email: customerInfo.email,
-      success_url: `${process.env.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL}/cancel`,
-      shipping_address_collection: { allowed_countries: ['US', 'CA'] },
-      billing_address_collection: 'required',
+      payment_method_types: ['card'], // Accept card payments
+      line_items: lineItems,          // Our items for checkout
+      mode: 'payment',                // One-time payment mode
+      customer_email: customerInfo.email, // Send email to Stripe for receipts
+      success_url: `${process.env.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`, // Where to go if payment succeeds
+      cancel_url: `${process.env.FRONTEND_URL}/cancel`, // Where to go if they cancel
+      shipping_address_collection: {
+        allowed_countries: ['US', 'CA'], // Which countries we ship to
+      },
+      billing_address_collection: 'required', // Ask for billing address
     });
 
+    // Debug: Print the session we got back from Stripe
     console.log("Created Stripe session:", session);
 
+    // Send back the session ID so the frontend can redirect the user
     res.status(200).json({ id: session.id });
   } catch (error) {
+    // If something went wrong, log the error and send back a message
     console.error('Stripe Checkout Session Error:', error);
     res.status(500).json({
       error: 'Failed to create Stripe session.',
@@ -219,4 +252,5 @@ app.post('/api/stripe/create-checkout-session', async (req, res) => {
   }
 });
 
+// Start the server and listen on the chosen port
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
