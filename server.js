@@ -1,4 +1,5 @@
-// This code sets up a simple Express server that talks to Stripe to create a checkout session.
+// This code sets up a simple Express server that talks to Stripe to create a checkout session
+// and also create orders in Printful after a successful payment.
 // We add console.log statements (debugging) to see what's going on and help fix problems.
 
 const express = require('express');         // Import Express to create a web server
@@ -31,7 +32,7 @@ console.log("Stripe Webhook Secret present:", Boolean(endpointSecret));
 
 // Webhook endpoint: Stripe calls this when something happens, like a payment finishing
 // Important: Define this BEFORE using express.json() so the raw body is available
-app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
 
@@ -39,11 +40,55 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
     event = stripeClient.webhooks.constructEvent(req.body, sig, endpointSecret);
     console.log('Webhook Verified:', event);
 
-    // Handle event if needed (e.g., checkout.session.completed)
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
       console.log('Payment successful:', session);
-      // Fulfill the order here if needed
+
+      // 1. Get line items for the session to know what was purchased
+      const lineItems = await stripeClient.checkout.sessions.listLineItems(session.id, { limit: 100 });
+      console.log('Line Items from Stripe:', lineItems.data);
+
+      // 2. Build items array for Printful order from the line items metadata
+      const printfulItems = lineItems.data.map((item) => {
+        // We saved variant_id in product_data.metadata.variant_id when creating the session
+        const variantId = item.price.product_metadata.variant_id;
+        return {
+          variant_id: parseInt(variantId, 10), // Ensure it's a number
+          quantity: item.quantity,
+        };
+      });
+
+      // 3. Prepare the shipping info from the session’s customer details
+      const { customer_details } = session;
+      const recipient = {
+        name: customer_details.name || 'No Name Provided',
+        address1: customer_details.address.line1 || '',
+        address2: customer_details.address.line2 || '',
+        city: customer_details.address.city || '',
+        state_code: customer_details.address.state || '',
+        country_code: customer_details.address.country || 'US',
+        zip: customer_details.address.postal_code || ''
+      };
+
+      console.log('Creating Printful order with items:', printfulItems);
+      console.log('Recipient:', recipient);
+
+      try {
+        const printfulResponse = await axios.post(
+          'https://api.printful.com/orders',
+          {
+            recipient,
+            items: printfulItems
+          },
+          {
+            headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` }
+          }
+        );
+
+        console.log('Printful order created:', printfulResponse.data);
+      } catch (error) {
+        console.error('Error creating Printful order:', error.message, error.response?.data);
+      }
     }
 
     res.status(200).send('Webhook received!');
